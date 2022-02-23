@@ -1,14 +1,9 @@
 barcode_change
 =====
 
-An escript
+An OTP application
 
 Build
 -----
 
-    $ rebar3 escriptize
-
-Run
----
-
-    $ _build/default/bin/barcode_change /pass/map/json/path/here
+    $ rebar3 compile

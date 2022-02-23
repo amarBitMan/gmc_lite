@@ -1,11 +1,13 @@
 {application, barcode_change,
- [{description, "An escript"},
+ [{description, "An OTP application"},
   {vsn, "0.1.0"},
   {registered, []},
+  {mod, {barcode_change_app, []}},
   {applications,
    [kernel,
     stdlib,
-    jsx
+    jsx,
+    cowboy
    ]},
   {env,[]},
   {modules, []},
