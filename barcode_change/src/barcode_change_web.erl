@@ -208,7 +208,7 @@ add_vda5050_ref(
     RefMap =
         #{
             barcode => Barcode,
-            vda5050_coordinate => "[0,0]"
+            vda5050_coordinate => [0,0]
         },
     FloorMap#{vda5050_reference => RefMap};
 add_vda5050_ref(
@@ -230,7 +230,7 @@ add_vda5050_ref(
     RefMap =
         #{
             barcode => create_barcode(Barcode div 512, Barcode rem 512),
-            vda5050_coordinate => jsx:encode([X, Y])
+            vda5050_coordinate => [X, Y]
         },
     FloorMap#{vda5050_reference => RefMap}.
 
@@ -259,4 +259,4 @@ read_body(Req0, Acc) ->
 
 read_json(Path) ->
     {ok, File} = file:open(Path, [read]),
-    file:read(File, 1024 * 1024).
+    file:read(File, 100 * 1024 * 1024).
