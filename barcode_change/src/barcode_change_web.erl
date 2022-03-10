@@ -47,12 +47,13 @@ init(
         {'EXIT', _Reason} ->
             Req2 = cowboy_req:reply(400, #{}, Request),
             {ok, Req2, State};
-        #{gmc_map_path := GmcMapPath, qt_map_path := QtMapPath} ->
+        #{gmc_map_path := GmcMapPath, qt_map_path := QtMapPath} = Payload ->
             {ok, F1} = read_json(GmcMapPath),
             {ok, F2} = read_json(QtMapPath),
+            BarcodeFmt = maps:get(barcode_fmt, Payload, <<"512X+Y">>),
             GmcMapJson = jsx:decode(erlang:list_to_binary(F1), [return_maps, {labels, atom}]),
             QtMapJson = jsx:decode(erlang:list_to_binary(F2), [return_maps, {labels, atom}]),
-            NewJson = create_json(GmcMapJson, QtMapJson),
+            NewJson = create_json(GmcMapJson, QtMapJson, BarcodeFmt),
             [Dir, _FileName] = string:split(binary_to_list(GmcMapPath), "/", trailing),
             MapFilePath = Dir ++ "/updated_map.json",
             file:write_file(MapFilePath, NewJson, []),
@@ -61,10 +62,11 @@ init(
                 200, #{}, jsx:encode(#{newJsonPath => list_to_binary(MapFilePath)}), Req
             ),
             {ok, Req1, State};
-        #{gmc_map_path := GmcMapPath} ->
+        #{gmc_map_path := GmcMapPath} = Payload ->
             {ok, F1} = read_json(GmcMapPath),
+            BarcodeFmt = maps:get(barcode_fmt, Payload, <<"512X+Y">>),
             GmcMapJson = jsx:decode(erlang:list_to_binary(F1), [return_maps, {labels, atom}]),
-            NewJson = create_json(GmcMapJson, 'X*512+Y'),
+            NewJson = create_json(GmcMapJson, 'X*512+Y', BarcodeFmt),
             [Dir, _FileName] = string:split(binary_to_list(GmcMapPath), "/", trailing),
             MapFilePath = Dir ++ "/updated_map.json",
             file:write_file(MapFilePath, NewJson, []),
@@ -83,13 +85,13 @@ init(Req0 = #{method := _Method, path := _Path}, State) ->
 terminate(_Reason, _Req, _State) ->
     ok.
 
-create_json(GmcMapJson, Rule) ->
+create_json(GmcMapJson, Rule, BarcodeFmt) ->
     GmcMapJson1 = add_floor_keys(GmcMapJson),
     GmcMapJson2 =
         lists:map(
             fun(#{map_values := MapValues} = FloorMap) ->
-                NewMapValues = apply_barcode_change(MapValues, Rule),
-                add_vda5050_ref(FloorMap#{map_values => NewMapValues}, Rule)
+                NewMapValues = apply_barcode_change(MapValues, Rule, BarcodeFmt),
+                add_vda5050_ref(FloorMap#{map_values => NewMapValues}, Rule, BarcodeFmt)
             end,
             GmcMapJson1
         ),
@@ -105,7 +107,7 @@ add_floor_keys(FloorList) ->
         }
     ].
 
-apply_barcode_change(MapValues, 'X*512+Y') ->
+apply_barcode_change(MapValues, 'X*512+Y', BarcodeFmt) ->
     WorldCoordinateList =
         lists:map(
             fun(#{world_coordinate := JsonWorldCoordinate}) ->
@@ -135,13 +137,13 @@ apply_barcode_change(MapValues, 'X*512+Y') ->
             fun(#{world_coordinate := JsonWorldCoordinate} = NodeData) ->
                 [WX, WY] = jsx:decode(JsonWorldCoordinate),
                 {BarcodeX, BarcodeY} = maps:get({WX, WY}, WCToQTCoordMap),
-                QTBarcode = create_barcode(BarcodeX, BarcodeY),
+                QTBarcode = create_barcode(BarcodeX, BarcodeY, BarcodeFmt),
                 NodeData#{barcode => QTBarcode}
             end,
             MapValues
         ),
     NewMapValues;
-apply_barcode_change(MapValues, #{zoneList := ZoneList}) ->
+apply_barcode_change(MapValues, #{zoneList := ZoneList}, BarcodeFmt) ->
     %% GMC World coordinates sorting
     WorldCoordinateList =
         lists:map(
@@ -190,7 +192,7 @@ apply_barcode_change(MapValues, #{zoneList := ZoneList}) ->
                 QTBarcodeInt = maps:get({QTX, QTY}, QTCoordinatesToBarcodeMap),
                 BarcodeX = QTBarcodeInt div 512,
                 BarcodeY = QTBarcodeInt rem 512,
-                QTBarcode = create_barcode(BarcodeX, BarcodeY),
+                QTBarcode = create_barcode(BarcodeX, BarcodeY, BarcodeFmt),
                 NodeData#{barcode => QTBarcode}
             end,
             MapValues
@@ -203,7 +205,8 @@ add_vda5050_ref(
             #{barcode := Barcode} | _RemNodes
         ]
     } = FloorMap,
-    'X*512+Y'
+    'X*512+Y',
+    _BarcodeFmt
 ) ->
     RefMap =
         #{
@@ -225,11 +228,12 @@ add_vda5050_ref(
             }
             | _RemZoneList
         ]
-    }
+    },
+    BarcodeFmt
 ) ->
     RefMap =
         #{
-            barcode => create_barcode(Barcode div 512, Barcode rem 512),
+            barcode => create_barcode(Barcode div 512, Barcode rem 512, BarcodeFmt),
             vda5050_coordinate => [X, Y]
         },
     FloorMap#{vda5050_reference => RefMap}.
@@ -241,7 +245,9 @@ to_binary_coord(Coord) when Coord >= 10 ->
 to_binary_coord(Coord) ->
     "00" ++ erlang:integer_to_list(Coord).
 
-create_barcode(X, Y) ->
+create_barcode(X, Y, <<"512X+Y">>) ->
+    integer_to_binary(512*X+Y);
+create_barcode(X, Y, _CoordFmt) ->
     erlang:list_to_binary( [
         to_binary_coord(X),
         <<".">>,
