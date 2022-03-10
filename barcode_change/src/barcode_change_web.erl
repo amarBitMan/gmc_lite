@@ -47,35 +47,33 @@ init(
         {'EXIT', _Reason} ->
             Req2 = cowboy_req:reply(400, #{}, Request),
             {ok, Req2, State};
-        #{gmc_map_path := GmcMapPath, qt_map_path := QtMapPath} = Payload ->
-            {ok, F1} = read_json(GmcMapPath),
-            {ok, F2} = read_json(QtMapPath),
-            BarcodeFmt = maps:get(barcode_fmt, Payload, <<"512X+Y">>),
-            GmcMapJson = jsx:decode(erlang:list_to_binary(F1), [return_maps, {labels, atom}]),
-            QtMapJson = jsx:decode(erlang:list_to_binary(F2), [return_maps, {labels, atom}]),
-            NewJson = create_json(GmcMapJson, QtMapJson, BarcodeFmt),
-            [Dir, _FileName] = string:split(binary_to_list(GmcMapPath), "/", trailing),
-            MapFilePath = Dir ++ "/updated_map.json",
-            file:write_file(MapFilePath, NewJson, []),
-            io:format("Update json file stored at ~p~n", [MapFilePath]),
-            Req1 = cowboy_req:reply(
-                200, #{}, jsx:encode(#{newJsonPath => list_to_binary(MapFilePath)}), Req
-            ),
-            {ok, Req1, State};
-        #{gmc_map_path := GmcMapPath} = Payload ->
-            {ok, F1} = read_json(GmcMapPath),
-            BarcodeFmt = maps:get(barcode_fmt, Payload, <<"512X+Y">>),
-            GmcMapJson = jsx:decode(erlang:list_to_binary(F1), [return_maps, {labels, atom}]),
-            NewJson = create_json(GmcMapJson, 'X*512+Y', BarcodeFmt),
-            [Dir, _FileName] = string:split(binary_to_list(GmcMapPath), "/", trailing),
-            MapFilePath = Dir ++ "/updated_map.json",
-            file:write_file(MapFilePath, NewJson, []),
-            io:format("Update json file stored at ~p~n", [MapFilePath]),
-            Req1 = cowboy_req:reply(
-                200, #{}, jsx:encode(#{newJsonPath => list_to_binary(MapFilePath)}), Req
-            ),
-            {ok, Req1, State}
+        #{jsons_path := JsonPathBin} = Payload ->
+            JsonPath = erlang:binary_to_list(JsonPathBin),
+            case file:list_dir(JsonPath) of
+                {ok, []} ->
+                    Req1 = cowboy_req:reply(400, #{}, jsx:decode("No Json files"), Req),
+                    {ok, Req1, State};
+                {ok, JsonFiles} ->
+                    BarcodeFmt = maps:get(barcode_fmt, Payload, <<"512X+Y">>),
+                    {ok, GOMapJsonCurrent} = read_json(JsonPath ++ "/map.json"),
+                    GOMapJson = jsx:decode(erlang:list_to_binary(GOMapJsonCurrent), [return_maps, {labels, atom}]),
+                    DecodeRule =
+                        case lists:member("qt_map.json", JsonFiles) of
+                            false ->
+                                'X*512+Y';
+                            true ->
+                                {ok, QtMapJson} = read_json(JsonPath ++ "/qt_map.json"),
+                                jsx:decode(erlang:list_to_binary(QtMapJson), [return_maps, {labels, atom}])
+                        end,
+                    Response = create_jsons(GOMapJson, DecodeRule, BarcodeFmt, JsonPath, JsonFiles),
+                    Req1 = cowboy_req:reply(200, #{}, Response, Req),
+                    {ok, Req1, State};
+                _Error ->
+                    Req1 = cowboy_req:reply(400, #{}, jsx:decode("Wrong path"), Req),
+                    {ok, Req1, State}
+            end
     end;
+
 init(Req0 = #{method := _Method, path := _Path}, State) ->
     Req = cowboy_req:reply(
         404, #{<<"content-type">> => <<"text/plain">>}, <<"Not Found">>, Req0
@@ -85,17 +83,48 @@ init(Req0 = #{method := _Method, path := _Path}, State) ->
 terminate(_Reason, _Req, _State) ->
     ok.
 
-create_json(GmcMapJson, Rule, BarcodeFmt) ->
-    GmcMapJson1 = add_floor_keys(GmcMapJson),
-    GmcMapJson2 =
-        lists:map(
-            fun(#{map_values := MapValues} = FloorMap) ->
-                NewMapValues = apply_barcode_change(MapValues, Rule, BarcodeFmt),
-                add_vda5050_ref(FloorMap#{map_values => NewMapValues}, Rule, BarcodeFmt)
+create_jsons(GOMapJson, Rule, BarcodeFmt, JsonPath, JsonFiles) ->
+    GOMapJson1 = add_floor_keys(GOMapJson),
+    {BarcodeMappingJsonF, BarcodeMappingF, GOMapJsonF} =
+        lists:foldl(
+            fun(#{map_values := MapValues, floor_id:= FloorId} = FloorMap, 
+                {BarcodeMappingJsonAcc, BarcodeMappingAcc, GOMapJsonAcc}
+            ) ->
+                {BarcodeMappingJson, BarcodeMapping, NewMapValues} = 
+                    apply_barcode_change(MapValues, Rule, BarcodeFmt),
+                {
+                    BarcodeMappingJsonAcc ++ [#{floor_id => FloorId, barcode_mapping => BarcodeMappingJson}],
+                    maps:merge(BarcodeMappingAcc, BarcodeMapping),
+                    GOMapJsonAcc ++ [add_vda5050_ref(FloorMap#{map_values => NewMapValues}, Rule, BarcodeFmt)]
+                }
             end,
-            GmcMapJson1
+            {[], #{}, []}, GOMapJson1
         ),
-    jsx:prettify(jsx:encode(GmcMapJson2, [{indent, 2}, {space, 1}])).
+    Jsons =
+        lists:foldl(
+            fun(JsonFileName, Acc) ->
+                FilePath = JsonPath ++ "/" ++ JsonFileName,
+                case filelib:is_dir(FilePath) of
+                    false ->
+                        {ok, Json} = read_json(FilePath),
+                        DecodedJson = jsx:decode(erlang:list_to_binary(Json), [return_maps, {labels, atom}]),
+                        case apply_barcode_change(JsonFileName, DecodedJson, BarcodeMappingF) of
+                            [] ->
+                                Acc;
+                            NewJson ->
+                                [{JsonFileName, NewJson} | Acc]
+                        end;
+                    _Dir ->
+                        Acc
+                end
+            end,
+            [
+                {"barcodeMapping.json", BarcodeMappingJsonF},
+                {"map.json", GOMapJsonF}
+            ],
+            JsonFiles -- ["map.json", "qt_map.json"]
+        ),
+    write_files(Jsons, JsonPath).
 
 add_floor_keys([#{floor_id := _Id} | _RemFloors] = FloorList) ->
     FloorList;
@@ -132,17 +161,21 @@ apply_barcode_change(MapValues, 'X*512+Y', BarcodeFmt) ->
             Y <- WorldCoordinatesYSorted
         ],
     WCToQTCoordMap = maps:from_list(lists:zip(WorldCoordinates, QTCoordinates)),
-    NewMapValues =
-        lists:map(
-            fun(#{world_coordinate := JsonWorldCoordinate} = NodeData) ->
-                [WX, WY] = jsx:decode(JsonWorldCoordinate),
-                {BarcodeX, BarcodeY} = maps:get({WX, WY}, WCToQTCoordMap),
-                QTBarcode = create_barcode(BarcodeX, BarcodeY, BarcodeFmt),
-                NodeData#{barcode => QTBarcode}
-            end,
-            MapValues
-        ),
-    NewMapValues;
+    lists:foldl(
+        fun(#{world_coordinate := JsonWorldCoordinate, barcode := OldBarcode} = NodeData, 
+            {BarcodeMappingAcc1, BarcodeMappingAcc2, NewMapValuesAcc}
+        ) ->
+            [WX, WY] = jsx:decode(JsonWorldCoordinate),
+            {BarcodeX, BarcodeY} = maps:get({WX, WY}, WCToQTCoordMap),
+            QTBarcode = create_barcode(BarcodeX, BarcodeY, BarcodeFmt),
+            {
+                BarcodeMappingAcc1 ++ [#{old_barcode => OldBarcode, new_barcode => QTBarcode}],
+                BarcodeMappingAcc2#{OldBarcode => QTBarcode},
+                NewMapValuesAcc ++ [NodeData#{barcode => QTBarcode}]
+            }
+        end,
+        {[], #{}, []}, MapValues
+    );
 apply_barcode_change(MapValues, #{zoneList := ZoneList}, BarcodeFmt) ->
     %% GMC World coordinates sorting
     WorldCoordinateList =
@@ -184,20 +217,108 @@ apply_barcode_change(MapValues, #{zoneList := ZoneList}, BarcodeFmt) ->
             Y <- lists:usort(YCoords)
         ],
     WCToQTCoordMap = maps:from_list(lists:zip(WorldCoordinates, QTCoordinates)),
-    NewMapValues =
-        lists:map(
-            fun(#{world_coordinate := JsonWorldCoordinate} = NodeData) ->
-                [WX, WY] = jsx:decode(JsonWorldCoordinate),
-                {QTX, QTY} = maps:get({WX, WY}, WCToQTCoordMap),
-                QTBarcodeInt = maps:get({QTX, QTY}, QTCoordinatesToBarcodeMap),
-                BarcodeX = QTBarcodeInt div 512,
-                BarcodeY = QTBarcodeInt rem 512,
-                QTBarcode = create_barcode(BarcodeX, BarcodeY, BarcodeFmt),
-                NodeData#{barcode => QTBarcode}
-            end,
-            MapValues
-        ),
-    NewMapValues.
+    lists:foldl(
+        fun(#{world_coordinate := JsonWorldCoordinate, barcode := OldBarcode} = NodeData,
+            {BarcodeMappingAcc1, BarcodeMappingAcc2, NewMapValuesAcc}
+        ) ->
+            [WX, WY] = jsx:decode(JsonWorldCoordinate),
+            {QTX, QTY} = maps:get({WX, WY}, WCToQTCoordMap),
+            QTBarcodeInt = maps:get({QTX, QTY}, QTCoordinatesToBarcodeMap),
+            BarcodeX = QTBarcodeInt div 512,
+            BarcodeY = QTBarcodeInt rem 512,
+            QTBarcode = create_barcode(BarcodeX, BarcodeY, BarcodeFmt),
+            {
+                BarcodeMappingAcc1 ++ [#{old_barcode => OldBarcode, new_barcode => QTBarcode}],
+                BarcodeMappingAcc2#{OldBarcode => QTBarcode},
+                NewMapValuesAcc ++ [NodeData#{barcode => QTBarcode}]
+            }
+        end,
+        {[], #{}, []}, MapValues
+    );
+apply_barcode_change("pps.json", DecodedJson, BarcodeMapping) ->
+    lists:map(
+        fun(OnePps) ->
+            maps:fold(
+                fun
+                    (location, Barcode, NewJson) ->
+                        NewJson#{location => maps:get(Barcode, BarcodeMapping, Barcode)};
+                    (queue_barcodes, QueueBarcodes, NewJson) ->
+                        NewQueueBarcodes = 
+                            [maps:get(Barcode, BarcodeMapping, Barcode) || Barcode <- QueueBarcodes],
+                        NewJson#{queue_barcodes => NewQueueBarcodes};
+                    (pick_position, Barcode, NewJson) ->
+                        NewJson#{pick_position => maps:get(Barcode, BarcodeMapping, Barcode)};
+                    (_K, _V, NewJson) ->
+                        NewJson
+                end,
+                OnePps, OnePps
+            )
+        end,
+        DecodedJson
+    );
+apply_barcode_change("charger.json", DecodedJson, BarcodeMapping) ->
+    lists:map(
+        fun(OneCharger) ->
+            maps:fold(
+                fun
+                    (charger_location, Barcode, NewJson) ->
+                        NewJson#{charger_location => maps:get(Barcode, BarcodeMapping, Barcode)};
+                    (entry_point_location, Barcode, NewJson) ->
+                        NewJson#{entry_point_location => maps:get(Barcode, BarcodeMapping, Barcode)};
+                    (reinit_point_location, Barcode, NewJson) ->
+                        NewJson#{reinit_point_location => maps:get(Barcode, BarcodeMapping, Barcode)};
+                    (_K, _V, NewJson) ->
+                        NewJson
+                end,
+                OneCharger, OneCharger
+            )
+        end,
+        DecodedJson
+    );
+apply_barcode_change("fire_emergency.json", DecodedJson, BarcodeMapping) ->
+    lists:map(
+        fun(OneGroup) ->
+            maps:fold(
+                fun
+                    (barcode, Barcode, NewJson) ->
+                        NewJson#{barcode => maps:get(Barcode, BarcodeMapping, Barcode)};
+                    (_K, _V, NewJson) ->
+                        NewJson
+                end,
+                OneGroup, OneGroup
+            )
+        end,
+        DecodedJson
+    );
+apply_barcode_change("elevator.json", DecodedJson, BarcodeMapping) ->
+    lists:map(
+        fun(OneElevator) ->
+            maps:fold(
+                fun
+                    (MultiBarcodeKey, Barcodes, NewJson) when 
+                    MultiBarcodeKey == reinit_barcodes orelse
+                    MultiBarcodeKey == exit_barcodes orelse
+                    MultiBarcodeKey == entry_barcodes  ->
+                        NewBarcodes =
+                            lists:map(
+                                fun(#{barcode := Barcode} = Data) ->
+                                    Data#{barcode => maps:get(Barcode, BarcodeMapping, Barcode)}
+                                end,
+                                Barcodes
+                            ),
+                        NewJson#{MultiBarcodeKey => NewBarcodes};
+                    (position, Barcode, NewJson) ->
+                        NewJson#{position => maps:get(Barcode, BarcodeMapping, Barcode)};
+                    (_K, _V, NewJson) ->
+                        NewJson
+                end,
+                OneElevator, OneElevator
+            )
+        end,
+        DecodedJson
+    );
+apply_barcode_change(_, _, _) ->
+    [].
 
 add_vda5050_ref(
     #{
@@ -234,7 +355,7 @@ add_vda5050_ref(
     RefMap =
         #{
             barcode => create_barcode(Barcode div 512, Barcode rem 512, BarcodeFmt),
-            vda5050_coordinate => [X, Y]
+            vda5050_coordinate => jsx:encode([X,Y])
         },
     FloorMap#{vda5050_reference => RefMap}.
 
@@ -266,3 +387,24 @@ read_body(Req0, Acc) ->
 read_json(Path) ->
     {ok, File} = file:open(Path, [read]),
     file:read(File, 100 * 1024 * 1024).
+
+prettify_json(JsonableTerm) ->
+    jsx:prettify(jsx:encode(JsonableTerm, [{indent, 2}, {space, 1}])).
+
+write_files(Jsons, Dir) ->
+    NewDir = Dir ++ "/updated_jsons",
+    case file:list_dir(NewDir) of
+        {ok, _Files} ->
+            ok;
+        _ ->
+        ok = file:make_dir(NewDir)
+    end,
+    lists:foreach(
+        fun({JsonFileName, JsonData}) ->
+            PrettyJsonData = prettify_json(JsonData),
+            FilePath = NewDir ++ "/" ++ JsonFileName,
+            ok = file:write_file(FilePath, PrettyJsonData, [])
+        end,
+        Jsons
+    ),
+    jsx:encode(list_to_binary(NewDir)).
