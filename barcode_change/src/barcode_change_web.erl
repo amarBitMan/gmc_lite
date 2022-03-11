@@ -298,6 +298,24 @@ apply_barcode_change("fire_emergency.json", Path, BarcodeMapping) ->
         end,
         read_json(Path)
     );
+apply_barcode_change("racks.json", Path, BarcodeMapping) ->
+    lists:map(
+        fun(OneRack) ->
+            maps:fold(
+                fun
+                    (position, Barcode, NewJson) ->
+                        NewJson#{position => maps:get(Barcode, BarcodeMapping, Barcode)};
+                    (last_store_position, Barcode, NewJson) ->
+                        NewJson#{position => maps:get(Barcode, BarcodeMapping, Barcode)};
+                    (_K, _V, NewJson) ->
+                        NewJson
+                end,
+                OneRack,
+                OneRack
+            )
+        end,
+        read_json(Path)
+    );
 apply_barcode_change("elevator.json", Path, BarcodeMapping) ->
     lists:map(
         fun(OneElevator) ->
