@@ -1,10 +1,6 @@
 -module(barcode_change_web).
--export([
-    start/0,
-    start/1,
-    stop/0,
-    stop/1
-]).
+-compile(export_all).
+
 
 %% Cowboy handler callbacks
 -export([
@@ -360,7 +356,7 @@ add_vda5050_ref(
     RefMap =
         #{
             barcode => Barcode,
-            vda5050_coordinate => [0, 0]
+            vda5050_coordinate => jsx:encode([0, 0])
         },
     FloorMap#{vda5050_reference => RefMap};
 add_vda5050_ref(
