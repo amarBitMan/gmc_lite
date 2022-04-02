@@ -1,9 +1,9 @@
 %%%-------------------------------------------------------------------
-%% @doc barcode_change top level supervisor.
+%% @doc gmc_lite top level supervisor.
 %% @end
 %%%-------------------------------------------------------------------
 
--module(barcode_change_sup).
+-module(gmc_lite_sup).
 
 -behaviour(supervisor).
 

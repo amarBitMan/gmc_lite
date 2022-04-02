@@ -1,4 +1,4 @@
--module(barcode_change_web).
+-module(gmc_lite_web).
 -compile(export_all).
 
 
@@ -12,13 +12,13 @@ start() ->
     start(#{}).
 
 start(InputOpts) ->
-    {ok, ConfOpts} = application:get_env(barcode_change, http_opts),
+    {ok, ConfOpts} = application:get_env(gmc_lite, http_opts),
     #{
         port := Port,
         listener_name := ListenerName
     } = maps:merge(ConfOpts, InputOpts),
     Dispatch = cowboy_router:compile([
-        {'_', [{"/api/[...]", barcode_change_web, []}]}
+        {'_', [{"/api/[...]", gmc_lite_web, []}]}
     ]),
     {ok, _} = cowboy:start_clear(
         ListenerName,
@@ -29,7 +29,7 @@ start(InputOpts) ->
     {ok, ListenPort}.
 
 stop() ->
-    stop(barcode_change_http_listener).
+    stop(gmc_lite_http_listener).
 
 stop(ListenerName) ->
     cowboy:stop_listener(ListenerName).
