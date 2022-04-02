@@ -69,9 +69,9 @@ handle_post(
     {error, jsx:encode(<<"Wrong Payload">>)};
 handle_post(
     #{path := <<"/api/generate_rack_json">>},
-    #{file_dir := _FilePathBin} = _PayLoad
+    #{file_dir := _FilePathBin} = PayLoad
 ) ->
-    {error, <<"To be Implemented">>};
+    gmc_lite_json_generator:generate_rack_json(PayLoad);
 handle_post(
     #{path := <<"/api/generate_rack_json">>},
     _PayLoad
