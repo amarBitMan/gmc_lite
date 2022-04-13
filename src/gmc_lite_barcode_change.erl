@@ -352,9 +352,11 @@ validate(JsonPath) ->
     [#{map_values := MapValues} | _] = add_floor_keys(GOMapJson),
     case validate_internal(MapValues, ZoneList) of
         {false, coordinate_count_diff, GoCount, QTCount} ->
-            #{
-                go_coord_count => GoCount,
-                qt_coord_count => QTCount
+            {error,
+                #{
+                    go_coord_count => GoCount,
+                    qt_coord_count => QTCount
+                }
             };
         {false, NotMatchedCoords, GOCoordinatesToBarcodeMap, QTCoordinatesToBarcodeMap} ->
             ErrorDetails =
@@ -387,13 +389,13 @@ validate_internal(MapValues, ZoneList) ->
         {GOCoordinatesToBarcodeMap, GOCoordinateOrderedList}, 
         {QTCoordinatesToBarcodeMap, QTCoordinateOrderedList}
     } = get_go_qt_coords(MapValues, ZoneList), 
-    QTGOCoords = lists:zip(GOCoordinateOrderedList, QTCoordinateOrderedList),
-    QTGOCoords1 = lists:droplast(QTGOCoords),
-    QTGOCoords2 = tl(QTGOCoords),
     GoCount = length(GOCoordinateOrderedList),
     QTCount = length(QTCoordinateOrderedList),
     if
         GoCount == QTCount ->
+            QTGOCoords = lists:zip(GOCoordinateOrderedList, QTCoordinateOrderedList),
+            QTGOCoords1 = lists:droplast(QTGOCoords),
+            QTGOCoords2 = tl(QTGOCoords),
             QTGOCoordsPairs = lists:zip(QTGOCoords1, QTGOCoords2),
             NotMatchedCoords =
                 lists:filter(
