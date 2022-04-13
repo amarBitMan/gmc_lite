@@ -68,6 +68,12 @@ handle_post(
 ) ->
     {error, jsx:encode(<<"Wrong Payload">>)};
 handle_post(
+    #{path := <<"/api/validate_change_barcode_data">>},
+    #{jsons_dir := JsonPathBin}
+) ->
+    JsonPath = erlang:binary_to_list(JsonPathBin),
+    gmc_lite_barcode_change:validate(JsonPath);
+handle_post(
     #{path := <<"/api/generate_rack_json">>},
     #{file_dir := _FilePathBin} = PayLoad
 ) ->

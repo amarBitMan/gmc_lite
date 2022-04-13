@@ -1,7 +1,5 @@
 -module(gmc_lite_barcode_change).
--export([
-    apply_barcode_change/1
-]).
+-compile(export_all).
 
 apply_barcode_change(#{jsons_dir := JsonPathBin} = PayLoad) ->
     JsonPath = erlang:binary_to_list(JsonPathBin),
@@ -117,45 +115,11 @@ apply_barcode_change(MapValues, 'X*512+Y', BarcodeFmt) ->
     );
 apply_barcode_change(MapValues, #{zoneList := ZoneList}, BarcodeFmt) ->
     %% GMC World coordinates sorting
-    WorldCoordinateList =
-        lists:map(
-            fun(#{world_coordinate := JsonWorldCoordinate}) ->
-                WorldCoordinateList = jsx:decode(JsonWorldCoordinate),
-                list_to_tuple(WorldCoordinateList)
-            end,
-            MapValues
-        ),
-    {WorldCoordinatesX, WorldCoordinatesY} = lists:unzip(WorldCoordinateList),
-    WorldCoordinatesYSorted = lists:reverse(lists:usort(WorldCoordinatesY)),
-    WorldCoordinatesXSorted = lists:usort(WorldCoordinatesX),
-    WorldCoordinates =
-        [
-            {X, Y}
-         || X <- WorldCoordinatesXSorted,
-            Y <- WorldCoordinatesYSorted
-        ],
-    %% QT World coordinates sorting and barcode mapping
-    {QTCoordinatesToBarcodeMap, XCoords, YCoords} =
-        lists:foldl(
-            fun(#{pointList := PointList}, Acc) ->
-                lists:foldl(
-                    fun(#{barCode := Barcode, x := X, y := Y}, {MapAcc, XCoordsAcc, YCoordsAcc}) ->
-                        {MapAcc#{{X, Y} => Barcode}, [X | XCoordsAcc], [Y | YCoordsAcc]}
-                    end,
-                    Acc,
-                    PointList
-                )
-            end,
-            {#{}, [], []},
-            ZoneList
-        ),
-    QTCoordinates =
-        [
-            {X, Y}
-         || X <- lists:usort(XCoords),
-            Y <- lists:usort(YCoords)
-        ],
-    WCToQTCoordMap = maps:from_list(lists:zip(WorldCoordinates, QTCoordinates)),
+    {
+        {_GOCoordinatesToBarcodeMap, GOCoordinateOrderedList}, 
+        {QTCoordinatesToBarcodeMap, QTCoordinateOrderedList}
+    } = get_go_qt_coords(MapValues, ZoneList),
+    WCToQTCoordMap = maps:from_list(lists:zip(GOCoordinateOrderedList, QTCoordinateOrderedList)),
     lists:foldl(
         fun(
             #{world_coordinate := JsonWorldCoordinate, barcode := OldBarcode} = NodeData,
@@ -343,9 +307,114 @@ create_barcode(X, Y, _CoordFmt) ->
         to_binary_coord(X),
         <<".">>,
         to_binary_coord(Y)
-    ]).
+    ]).    
 
+get_go_qt_coords(MapValues, ZoneList) ->
+    GOCoordinatesToBarcodeMap =
+        lists:foldl(
+            fun(#{world_coordinate := JsonWorldCoordinate, barcode := GOBarcode}, MapAcc) ->
+                WorldCoordinateList = jsx:decode(JsonWorldCoordinate),
+                MapAcc#{list_to_tuple(WorldCoordinateList) => GOBarcode}
+            end,
+           #{},  MapValues
+        ),
+    GOCoordinateOrderedList =
+        lists:sort(
+            fun({X1, Y1}, {X2, Y2}) ->
+                X1 < X2 orelse (X1 == X2 andalso Y1 > Y2)
+            end,
+            maps:keys(GOCoordinatesToBarcodeMap)
+        ),
+    QTCoordinatesToBarcodeMap =
+        lists:foldl(
+            fun(#{pointList := PointList}, Acc) ->
+                lists:foldl(
+                    fun(#{barCode := Barcode, x := X, y := Y}, MapAcc) ->
+                        MapAcc#{{X, Y} => Barcode}
+                    end,
+                    Acc,
+                    PointList
+                )
+            end,
+            #{},
+            ZoneList
+        ),
+    QTCoordinateOrderedList = lists:usort(maps:keys(QTCoordinatesToBarcodeMap)),
+    {
+        {GOCoordinatesToBarcodeMap, GOCoordinateOrderedList}, 
+        {QTCoordinatesToBarcodeMap, QTCoordinateOrderedList}
+    }.
 
+validate(JsonPath) ->
+    GOMapJson = gmc_lite_file_utils:read_json(JsonPath ++ "/map.json"),
+    QTMapJson = gmc_lite_file_utils:read_json(JsonPath ++ "/qt_map.json"),
+    #{zoneList := ZoneList} = QTMapJson,
+    [#{map_values := MapValues} | _] = add_floor_keys(GOMapJson),
+    case validate_internal(MapValues, ZoneList) of
+        {false, coordinate_count_diff, GoCount, QTCount} ->
+            #{
+                go_coord_count => GoCount,
+                qt_coord_count => QTCount
+            };
+        {false, NotMatchedCoords, GOCoordinatesToBarcodeMap, QTCoordinatesToBarcodeMap} ->
+            ErrorDetails =
+                lists:map(
+                    fun({{G1, Q1}, {G2, Q2}}) ->
+                        #{
+                            go_map => #{
+                                go_barcode_src => maps:get(G1, GOCoordinatesToBarcodeMap),
+                                go_coord_src => jsx:encode(tuple_to_list(G1)) ,
+                                go_barcode_dest => maps:get(G2, GOCoordinatesToBarcodeMap),
+                                go_coord_dest => jsx:encode(tuple_to_list(G2))
+                            },
+                            qt_map => #{
+                                qt_barcode_src => integer_to_binary(maps:get(Q1, QTCoordinatesToBarcodeMap)),
+                                qt_coord_src => jsx:encode(tuple_to_list(Q1)),
+                                qt_barcode_dest => integer_to_binary(maps:get(Q2, QTCoordinatesToBarcodeMap)),
+                                qt_coord_dest => jsx:encode(tuple_to_list(Q2))
+                            }
+                        }
+                    end,
+                    NotMatchedCoords
+                ),
+            {error, ErrorDetails};
+        _Valid ->
+            {ok, <<"Valid">>}
+    end.
 
-
-
+validate_internal(MapValues, ZoneList) ->
+    {
+        {GOCoordinatesToBarcodeMap, GOCoordinateOrderedList}, 
+        {QTCoordinatesToBarcodeMap, QTCoordinateOrderedList}
+    } = get_go_qt_coords(MapValues, ZoneList), 
+    QTGOCoords = lists:zip(GOCoordinateOrderedList, QTCoordinateOrderedList),
+    QTGOCoords1 = lists:droplast(QTGOCoords),
+    QTGOCoords2 = tl(QTGOCoords),
+    GoCount = length(GOCoordinateOrderedList),
+    QTCount = length(QTCoordinateOrderedList),
+    if
+        GoCount == QTCount ->
+            QTGOCoordsPairs = lists:zip(QTGOCoords1, QTGOCoords2),
+            NotMatchedCoords =
+                lists:filter(
+                    fun({
+                            {{GX1, GY1}, {QX1, QY1}}, 
+                            {{GX2, GY2}, {QX2, QY2}}
+                    }) ->
+                        DGX = abs(GX2 - GX1),
+                        DGY = abs(GY2 - GY1),
+                        DQX = abs(QX2 - QX1),
+                        DQY = abs(QY2 - QY1),
+                        DGX =/= DQX orelse DGY =/= DQY
+                    end,
+                    QTGOCoordsPairs
+                ),
+            case NotMatchedCoords of
+                [] ->
+                    true;
+                NotMatchedCoords ->
+                    {false, NotMatchedCoords, GOCoordinatesToBarcodeMap, QTCoordinatesToBarcodeMap}
+            end;
+        true ->
+            {false, coordinate_count_diff, GoCount, QTCount}
+    end.
