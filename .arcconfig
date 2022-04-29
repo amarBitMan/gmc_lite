@@ -1,0 +1,7 @@
+{
+  "phabricator.uri" : "https://phab.greyorange.com/",
+  "arc.land.onto.default": "master",
+  "arc.land.update.default": "rebase",
+  "history.immutable": false,
+  "base": "git:origin/master"
+}

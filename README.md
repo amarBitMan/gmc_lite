@@ -11,3 +11,8 @@ Build
 Run
 ----
     $ rebar3 shell
+
+Release
+---
+    $ rebar3 release -n gmc_Lite
+	
