@@ -1,5 +1,6 @@
 -module(gmc_lite_barcode_change).
 -compile(export_all).
+-compile(nowarn_export_all).
 
 apply_barcode_change(#{jsons_dir := JsonPathBin} = PayLoad) ->
     JsonPath = erlang:binary_to_list(JsonPathBin),
@@ -9,12 +10,17 @@ apply_barcode_change(#{jsons_dir := JsonPathBin} = PayLoad) ->
         {ok, JsonFiles} ->
             BarcodeFmt = maps:get(barcode_fmt, PayLoad, <<"512X+Y">>),
             GOMapJson = gmc_lite_file_utils:read_json(JsonPath ++ "/map.json"),
+            IsQtMap = lists:member("qt_map.json", JsonFiles),
+            IsCsvFile = lists:member("qt_barcode_data.csv", JsonFiles),
             DecodeRule =
-                case lists:member("qt_map.json", JsonFiles) of
-                    false ->
-                        'X*512+Y';
+                if
+                    IsQtMap ->
+                        gmc_lite_file_utils:read_json(JsonPath ++ "/qt_map.json");
+                    IsCsvFile ->
+                        BinaryRule = gmc_lite_file_utils:parse_csv_file(JsonPath ++ "/qt_barcode_data.csv"),
+                        [[binary_to_integer(Barcode), binary_to_integer(X), binary_to_integer(Y)] || [Barcode, X, Y] <- BinaryRule];
                     true ->
-                        gmc_lite_file_utils:read_json(JsonPath ++ "/qt_map.json")
+                        'X*512+Y'
                 end,
             {ok, transform_jsons(GOMapJson, DecodeRule, BarcodeFmt, JsonPath, JsonFiles)};
         _Error ->
@@ -56,7 +62,7 @@ transform_jsons(GOMapJson, Rule, BarcodeFmt, JsonPath, JsonFiles) ->
                         false
                 end
             end,
-            JsonFiles -- ["map.json", "qt_map.json"]
+            JsonFiles -- ["map.json", "qt_map.json", "qt_barcode_data.csv"]
         ),
     gmc_lite_file_utils:write_files([{"map.json", GOMapJsonF} | Jsons], 
         JsonPath ++ "/updated_jsons"
@@ -114,6 +120,8 @@ apply_barcode_change(MapValues, 'X*512+Y', BarcodeFmt) ->
         MapValues
     );
 apply_barcode_change(MapValues, #{zoneList := ZoneList}, BarcodeFmt) ->
+    apply_barcode_change(MapValues, ZoneList, BarcodeFmt);
+apply_barcode_change(MapValues, ZoneList, BarcodeFmt) when is_list(ZoneList)->
     %% GMC World coordinates sorting
     {
         {_GOCoordinatesToBarcodeMap, GOCoordinateOrderedList}, 
@@ -291,6 +299,18 @@ add_vda5050_ref(
             barcode => create_barcode(Barcode div 512, Barcode rem 512, BarcodeFmt),
             vda5050_coordinate => jsx:encode([X, Y])
         },
+    FloorMap#{vda5050_reference => RefMap};
+
+add_vda5050_ref(
+    FloorMap,
+    [[Barcode, X, Y] | _Rem],
+    BarcodeFmt
+) ->
+    RefMap =
+        #{
+            barcode => create_barcode(Barcode div 512, Barcode rem 512, BarcodeFmt),
+            vda5050_coordinate => jsx:encode([X, Y])
+        },
     FloorMap#{vda5050_reference => RefMap}.
 
 to_binary_coord(Coord) when Coord >= 100 ->
@@ -309,7 +329,7 @@ create_barcode(X, Y, _CoordFmt) ->
         to_binary_coord(Y)
     ]).    
 
-get_go_qt_coords(MapValues, ZoneList) ->
+get_go_qt_coords(MapValues, BarcodeData) ->
     GOCoordinatesToBarcodeMap =
         lists:foldl(
             fun(#{world_coordinate := JsonWorldCoordinate, barcode := GOBarcode}, MapAcc) ->
@@ -325,25 +345,31 @@ get_go_qt_coords(MapValues, ZoneList) ->
             end,
             maps:keys(GOCoordinatesToBarcodeMap)
         ),
+    {
+        {GOCoordinatesToBarcodeMap, GOCoordinateOrderedList},
+        get_qt_coords(BarcodeData)
+    }.
+
+get_qt_coords(BarcodeData) ->
     QTCoordinatesToBarcodeMap =
         lists:foldl(
-            fun(#{pointList := PointList}, Acc) ->
-                lists:foldl(
-                    fun(#{barCode := Barcode, x := X, y := Y}, MapAcc) ->
-                        MapAcc#{{X, Y} => Barcode}
-                    end,
-                    Acc,
-                    PointList
-                )
+            fun
+                (#{pointList := PointList}, Acc) ->
+                    lists:foldl(
+                        fun(#{barCode := Barcode, x := X, y := Y}, MapAcc) ->
+                            MapAcc#{{X, Y} => Barcode}
+                        end,
+                        Acc,
+                        PointList
+                    );
+                ([Barcode, X, Y], MapAcc) ->
+                    MapAcc#{{X, Y} => Barcode}
             end,
             #{},
-            ZoneList
+            BarcodeData
         ),
     QTCoordinateOrderedList = lists:usort(maps:keys(QTCoordinatesToBarcodeMap)),
-    {
-        {GOCoordinatesToBarcodeMap, GOCoordinateOrderedList}, 
-        {QTCoordinatesToBarcodeMap, QTCoordinateOrderedList}
-    }.
+    {QTCoordinatesToBarcodeMap, QTCoordinateOrderedList}.
 
 validate(JsonPath) ->
     GOMapJson = gmc_lite_file_utils:read_json(JsonPath ++ "/map.json"),
