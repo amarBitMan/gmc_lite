@@ -78,75 +78,6 @@ add_floor_keys(FloorList) ->
         }
     ].
 
-apply_barcode_change(MapValues, 'X*512+Y', BarcodeFmt) ->
-    WorldCoordinateList =
-        lists:map(
-            fun(#{world_coordinate := JsonWorldCoordinate}) ->
-                WorldCoordinateList = jsx:decode(JsonWorldCoordinate),
-                list_to_tuple(WorldCoordinateList)
-            end,
-            MapValues
-        ),
-    {WorldCoordinatesX, WorldCoordinatesY} = lists:unzip(WorldCoordinateList),
-    WorldCoordinatesYSorted = lists:reverse(lists:usort(WorldCoordinatesY)),
-    WorldCoordinatesXSorted = lists:usort(WorldCoordinatesX),
-    QTCoordinates =
-        [
-            {X, Y}
-         || X <- lists:seq(0, length(WorldCoordinatesXSorted) - 1),
-            Y <- lists:seq(0, length(WorldCoordinatesYSorted) - 1)
-        ],
-    WorldCoordinates =
-        [
-            {X, Y}
-         || X <- WorldCoordinatesXSorted,
-            Y <- WorldCoordinatesYSorted
-        ],
-    WCToQTCoordMap = maps:from_list(lists:zip(WorldCoordinates, QTCoordinates)),
-    lists:foldl(
-        fun(
-            #{world_coordinate := JsonWorldCoordinate, barcode := OldBarcode} = NodeData,
-            {BarcodeMappingAcc2, NewMapValuesAcc}
-        ) ->
-            [WX, WY] = jsx:decode(JsonWorldCoordinate),
-            {BarcodeX, BarcodeY} = maps:get({WX, WY}, WCToQTCoordMap),
-            QTBarcode = create_barcode(BarcodeX, BarcodeY, BarcodeFmt),
-            {
-                BarcodeMappingAcc2#{OldBarcode => QTBarcode},
-                NewMapValuesAcc ++ [NodeData#{barcode => QTBarcode}]
-            }
-        end,
-        {#{}, []},
-        MapValues
-    );
-apply_barcode_change(MapValues, #{zoneList := ZoneList}, BarcodeFmt) ->
-    apply_barcode_change(MapValues, ZoneList, BarcodeFmt);
-apply_barcode_change(MapValues, ZoneList, BarcodeFmt) when is_list(ZoneList)->
-    %% GMC World coordinates sorting
-    {
-        {_GOCoordinatesToBarcodeMap, GOCoordinateOrderedList}, 
-        {QTCoordinatesToBarcodeMap, QTCoordinateOrderedList}
-    } = get_go_qt_coords(MapValues, ZoneList),
-    WCToQTCoordMap = maps:from_list(lists:zip(GOCoordinateOrderedList, QTCoordinateOrderedList)),
-    lists:foldl(
-        fun(
-            #{world_coordinate := JsonWorldCoordinate, barcode := OldBarcode} = NodeData,
-            {BarcodeMappingAcc, NewMapValuesAcc}
-        ) ->
-            [WX, WY] = jsx:decode(JsonWorldCoordinate),
-            {QTX, QTY} = maps:get({WX, WY}, WCToQTCoordMap),
-            QTBarcodeInt = maps:get({QTX, QTY}, QTCoordinatesToBarcodeMap),
-            BarcodeX = QTBarcodeInt div 512,
-            BarcodeY = QTBarcodeInt rem 512,
-            QTBarcode = create_barcode(BarcodeX, BarcodeY, BarcodeFmt),
-            {
-                BarcodeMappingAcc#{OldBarcode => QTBarcode},
-                NewMapValuesAcc ++ [NodeData#{barcode => QTBarcode}]
-            }
-        end,
-        {#{}, []},
-        MapValues
-    );
 apply_barcode_change("pps.json", Path, BarcodeMapping) ->
     lists:map(
         fun(OnePps) ->
@@ -258,6 +189,75 @@ apply_barcode_change("elevator.json", Path, BarcodeMapping) ->
             )
         end,
         gmc_lite_file_utils:read_json(Path)
+    );
+apply_barcode_change(MapValues, 'X*512+Y', BarcodeFmt) ->
+    WorldCoordinateList =
+        lists:map(
+            fun(#{world_coordinate := JsonWorldCoordinate}) ->
+                WorldCoordinateList = jsx:decode(JsonWorldCoordinate),
+                list_to_tuple(WorldCoordinateList)
+            end,
+            MapValues
+        ),
+    {WorldCoordinatesX, WorldCoordinatesY} = lists:unzip(WorldCoordinateList),
+    WorldCoordinatesYSorted = lists:reverse(lists:usort(WorldCoordinatesY)),
+    WorldCoordinatesXSorted = lists:usort(WorldCoordinatesX),
+    QTCoordinates =
+        [
+            {X, Y}
+         || X <- lists:seq(0, length(WorldCoordinatesXSorted) - 1),
+            Y <- lists:seq(0, length(WorldCoordinatesYSorted) - 1)
+        ],
+    WorldCoordinates =
+        [
+            {X, Y}
+         || X <- WorldCoordinatesXSorted,
+            Y <- WorldCoordinatesYSorted
+        ],
+    WCToQTCoordMap = maps:from_list(lists:zip(WorldCoordinates, QTCoordinates)),
+    lists:foldl(
+        fun(
+            #{world_coordinate := JsonWorldCoordinate, barcode := OldBarcode} = NodeData,
+            {BarcodeMappingAcc2, NewMapValuesAcc}
+        ) ->
+            [WX, WY] = jsx:decode(JsonWorldCoordinate),
+            {BarcodeX, BarcodeY} = maps:get({WX, WY}, WCToQTCoordMap),
+            QTBarcode = create_barcode(BarcodeX, BarcodeY, BarcodeFmt),
+            {
+                BarcodeMappingAcc2#{OldBarcode => QTBarcode},
+                NewMapValuesAcc ++ [NodeData#{barcode => QTBarcode}]
+            }
+        end,
+        {#{}, []},
+        MapValues
+    );
+apply_barcode_change(MapValues, #{zoneList := ZoneList}, BarcodeFmt) ->
+    apply_barcode_change(MapValues, ZoneList, BarcodeFmt);
+apply_barcode_change(MapValues, ZoneList, BarcodeFmt) when is_list(ZoneList)->
+    %% GMC World coordinates sorting
+    {
+        {_GOCoordinatesToBarcodeMap, GOCoordinateOrderedList}, 
+        {QTCoordinatesToBarcodeMap, QTCoordinateOrderedList}
+    } = get_go_qt_coords(MapValues, ZoneList),
+    WCToQTCoordMap = maps:from_list(lists:zip(GOCoordinateOrderedList, QTCoordinateOrderedList)),
+    lists:foldl(
+        fun(
+            #{world_coordinate := JsonWorldCoordinate, barcode := OldBarcode} = NodeData,
+            {BarcodeMappingAcc, NewMapValuesAcc}
+        ) ->
+            [WX, WY] = jsx:decode(JsonWorldCoordinate),
+            {QTX, QTY} = maps:get({WX, WY}, WCToQTCoordMap),
+            QTBarcodeInt = maps:get({QTX, QTY}, QTCoordinatesToBarcodeMap),
+            BarcodeX = QTBarcodeInt div 512,
+            BarcodeY = QTBarcodeInt rem 512,
+            QTBarcode = create_barcode(BarcodeX, BarcodeY, BarcodeFmt),
+            {
+                BarcodeMappingAcc#{OldBarcode => QTBarcode},
+                NewMapValuesAcc ++ [NodeData#{barcode => QTBarcode}]
+            }
+        end,
+        {#{}, []},
+        MapValues
     );
 apply_barcode_change(_, _, _) ->
     [].
