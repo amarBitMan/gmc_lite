@@ -36,7 +36,7 @@ transform_jsons(GOMapJson, Rule, BarcodeFmt, JsonPath, JsonFiles) ->
                 {BarcodeMappingAcc, GOMapJsonAcc}
             ) ->
                 {BarcodeMapping, NewMapValues} =
-                    apply_barcode_change(MapValues, Rule, BarcodeFmt),
+                    apply_barcode_change("map.json",MapValues, Rule, BarcodeFmt),
                 {
                     maps:merge(BarcodeMappingAcc, BarcodeMapping),
                     GOMapJsonAcc ++
@@ -190,7 +190,10 @@ apply_barcode_change("elevator.json", Path, BarcodeMapping) ->
         end,
         gmc_lite_file_utils:read_json(Path)
     );
-apply_barcode_change(MapValues, 'X*512+Y', BarcodeFmt) ->
+apply_barcode_change(_, _, _) ->
+    [].
+
+apply_barcode_change("map.json", MapValues, 'X*512+Y', BarcodeFmt) ->
     WorldCoordinateList =
         lists:map(
             fun(#{world_coordinate := JsonWorldCoordinate}) ->
@@ -231,9 +234,9 @@ apply_barcode_change(MapValues, 'X*512+Y', BarcodeFmt) ->
         {#{}, []},
         MapValues
     );
-apply_barcode_change(MapValues, #{zoneList := ZoneList}, BarcodeFmt) ->
-    apply_barcode_change(MapValues, ZoneList, BarcodeFmt);
-apply_barcode_change(MapValues, ZoneList, BarcodeFmt) when is_list(ZoneList)->
+apply_barcode_change("map.json", MapValues, #{zoneList := ZoneList}, BarcodeFmt) ->
+    apply_barcode_change( "map.json",MapValues, ZoneList, BarcodeFmt);
+apply_barcode_change("map.json", MapValues, ZoneList, BarcodeFmt)->
     %% GMC World coordinates sorting
     {
         {_GOCoordinatesToBarcodeMap, GOCoordinateOrderedList}, 
@@ -258,9 +261,7 @@ apply_barcode_change(MapValues, ZoneList, BarcodeFmt) when is_list(ZoneList)->
         end,
         {#{}, []},
         MapValues
-    );
-apply_barcode_change(_, _, _) ->
-    [].
+    ).
 
 add_vda5050_ref(
     #{
