@@ -2,8 +2,7 @@
 -compile(export_all).
 -compile(nowarn_export_all).
 
-apply_barcode_change(#{jsons_dir := JsonPathBin} = PayLoad) ->
-    JsonPath = erlang:binary_to_list(JsonPathBin),
+apply_barcode_change(#{jsons_dir := JsonPath} = PayLoad) ->
     case file:list_dir(JsonPath) of
         {ok, []} ->
             {error, "Folder Empty"};

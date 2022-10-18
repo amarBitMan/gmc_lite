@@ -1,9 +1,25 @@
 -module(gmc_lite_file_utils).
 -export([
+    get_data_dir/0,
     read_json/1,
     parse_csv_file/1,
     write_files/2
 ]).
+
+-spec get_data_dir() -> file:filename().
+get_data_dir() ->
+    DataRootConfig = application:get_env(gmc_lite, data_root, cwd),
+    DataRoot =
+        case DataRootConfig of
+            root ->
+                code:root_dir();
+            cwd ->
+                {ok, CWD} = file:get_cwd(),
+                CWD;
+            priv ->
+                code:priv_dir(gmc_lite)
+        end,
+    filename:join(DataRoot, "data").
 
 read_json(Path) ->
     {ok, File} = file:open(Path, [read]),

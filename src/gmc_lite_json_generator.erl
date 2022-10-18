@@ -3,8 +3,7 @@
     generate_rack_json/1
 ]).
 
-generate_rack_json(#{file_dir := FilePathBin}) ->
-    FilePath = erlang:binary_to_list(FilePathBin),
+generate_rack_json(#{file_dir := FilePath}) ->
     case file:list_dir(FilePath) of
         {ok, []} ->
             {error, <<"Folder Empty">>};
